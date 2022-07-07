@@ -1,6 +1,6 @@
 use thiserror::Error as DeriveError;
 
-#[derive(Debug, DeriveError)]
+#[derive(Debug, DeriveError, PartialEq)]
 pub enum Error {
     #[error("The operation failed but a more specific error is not available")]
     Failed, // 1

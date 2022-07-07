@@ -363,3 +363,20 @@ pub fn _faceIjkToH3(fijk: &FaceIJK, res: i32) -> H3Index {
 
     return h;
 }
+
+#[cfg(test)]
+mod tests {
+    use num::Float;
+
+    use super::*;
+
+    #[test]
+    fn internal() {
+        let g = LatLng {
+            lat: 74.883263.to_radians(),
+            lng: 341.4071200.to_radians(),
+        };
+        let res = 7;
+        assert_eq!(Ok(0x8707ac082ffffffu64), latLngToCell(&g, res));
+    }
+}

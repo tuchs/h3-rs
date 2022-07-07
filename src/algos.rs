@@ -326,6 +326,117 @@ const NEW_ADJUSTMENT_III: [[Direction; 7]; 7] = [
 ];
 
 /**
+ * Maximum number of cells that result from the gridDisk algorithm with the
+ * given k. Formula source and proof: https://oeis.org/A003215
+ *
+ * @param   k   k value, k >= 0.
+ * @param out   size in indexes
+ */
+pub fn maxGridDiskSize(k: u32) -> usize {
+    return (3 * k as i64 * (k as i64 + 1) + 1) as usize;
+}
+
+/**
+ * Produce cells and their distances from the given origin cell, up to
+ * distance k.
+ *
+ * k-ring 0 is defined as the origin cell, k-ring 1 is defined as k-ring 0 and
+ * all neighboring cells, and so on.
+ *
+ * Output is placed in the provided array in no particular order. Elements of
+ * the output array may be left zero, as can happen when crossing a pentagon.
+ *
+ * @param  origin      origin cell
+ * @param  k           k >= 0
+ * @param  out         zero-filled array which must be of size
+ * maxGridDiskSize(k)
+ * @param  distances   NULL or a zero-filled array which must be of size
+ *                     maxGridDiskSize(k)
+ */
+fn gridDiskDistances(origin: H3Index, k: u32) -> Result<Vec<(H3Index, u32)>, Error> {
+    // Optimistically try the faster gridDiskUnsafe algorithm first
+    match gridDiskDistancesUnsafe(origin, k) {
+        Ok(out) => return Ok(out),
+        Err(e) => e,
+    };
+
+    let maxIdx = maxGridDiskSize(k);
+
+    // Fast algo failed, fall back to slower, correct algo
+    let mut out: Vec<(H3Index, u32)> = Vec::new();
+    out.resize(maxIdx, (0, 0));
+
+    _gridDiskDistancesInternal(origin, k, &mut out, maxIdx, 0)?;
+    println!("{:?}", &out);
+    Ok(out
+        .into_iter()
+        .filter(|(h3index, _distance)| *h3index != 0)
+        .collect())
+}
+
+/**
+ * Internal algorithm for the safe but slow version of gridDiskDistances
+ *
+ * Adds the origin cell to the output set (treating it as a hash set)
+ * and recurses to its neighbors, if needed.
+ *
+ * @param  origin      Origin cell
+ * @param  k           Maximum distance to move from the origin
+ * @param  out         Array treated as a hash set, elements being either
+ *                     H3Index or 0.
+ * @param  distances   Scratch area, with elements paralleling the out array.
+ *                     Elements indicate ijk distance from the origin cell to
+ *                     the output cell
+ * @param  maxIdx      Size of out and scratch arrays (must be
+ * maxGridDiskSize(k))
+ * @param  curK        Current distance from the origin
+ */
+fn _gridDiskDistancesInternal(
+    mut origin: H3Index,
+    k: u32,
+    out: &mut Vec<(H3Index, u32)>,
+    maxIdx: usize,
+    curK: u32,
+) -> Result<(), Error> {
+    // Put origin in the output array. out is used as a hash set.
+    let mut off: usize = (origin % maxIdx as u64) as usize;
+    while out[off].0 != 0 && out[off].0 != origin {
+        off = ((off + 1) % maxIdx) as usize;
+    }
+
+    // We either got a free slot in the hash set or hit a duplicate
+    // We might need to process the duplicate anyways because we got
+    // here on a longer path before.
+    if out[off].0 == origin && out[off].1 <= curK {
+        return Ok(());
+    }
+
+    out[off].0 = origin;
+    out[off].1 = curK;
+
+    // Base case: reached an index k away from the origin.
+    if curK >= k {
+        return Ok(());
+    }
+
+    // Recurse to all neighbors in no particular order.
+    for i in 0..6 {
+        let mut rotations: i32 = 0;
+        match h3NeighborRotations(origin, DIRECTIONS[i], &mut rotations) {
+            Ok(result) => {
+                _gridDiskDistancesInternal(result, k, out, maxIdx, curK + 1)?;
+            }
+            Err(e) => {
+                if e != Error::Pentagon {
+                    return Err(e);
+                }
+            }
+        };
+    }
+    return Ok(());
+}
+
+/**
  * Returns the hexagon index neighboring the origin, in the direction dir.
  *
  * Implementation note: The only reachable case where this returns 0 is if the
@@ -529,10 +640,10 @@ fn h3NeighborRotations(
  */
 pub fn gridDiskDistancesUnsafe(
     mut origin: H3Index,
-    k: i32,
+    k: u32,
     //out: &mut Vec<H3Index>,
     //distances: &mut Vec<i32>,
-) -> Result<Vec<(u32, H3Index)>, Error> {
+) -> Result<Vec<(H3Index, u32)>, Error> {
     // Return codes:
     // 1 Pentagon was encountered
     // 2 Pentagon distortion (deleted k subsequence) was encountered
@@ -543,10 +654,10 @@ pub fn gridDiskDistancesUnsafe(
         return Err(Error::Domain);
     }
 
-    let mut out: Vec<(u32, H3Index)> = Vec::new();
+    let mut out: Vec<(H3Index, u32)> = Vec::new();
 
     // k must be >= 0, so origin is always needed
-    out.push((0, origin));
+    out.push((origin, 0));
 
     if isPentagon(origin) {
         // Pentagon was encountered; bail out as user doesn't want this.
@@ -563,7 +674,7 @@ pub fn gridDiskDistancesUnsafe(
     // which faces have been crossed.)
     let mut rotations: i32 = 0;
 
-    while ring <= k as u32 {
+    while ring <= k {
         if direction == 0 && i == 0 {
             // Not putting in the output set as it will be done later, at
             // the end of this ring.
@@ -576,7 +687,7 @@ pub fn gridDiskDistancesUnsafe(
         }
 
         origin = h3NeighborRotations(origin, DIRECTIONS[direction as usize], &mut rotations)?;
-        out.push((ring, origin));
+        out.push((origin, ring));
         //distances.push(ring);
         //idx += 1;
 
@@ -598,4 +709,48 @@ pub fn gridDiskDistancesUnsafe(
         }
     }
     return Ok(out);
+}
+
+#[cfg(test)]
+mod tests {
+    use num::Float;
+
+    use crate::{h3_index::latLngToCell, lat_lng::LatLng};
+
+    use super::*;
+
+    #[test]
+    fn gridDisk0() {
+        let sf = LatLng {
+            lat: 0.659966917655,
+            lng: 2.0 * 3.14159 - 2.1364398519396,
+        };
+        let sfHex0 = latLngToCell(&sf, 0).unwrap();
+
+        let expectedK1: Vec<(H3Index, u32)> = vec![
+            (0x8029fffffffffff, 0),
+            (0x801dfffffffffff, 0),
+            (0x8013fffffffffff, 0),
+            (0x8027fffffffffff, 0),
+            (0x8049fffffffffff, 0),
+            (0x8051fffffffffff, 0),
+            (0x8037fffffffffff, 0),
+        ];
+
+        let res = gridDiskDistances(sfHex0, 1).unwrap();
+        for i in 0..7 {
+            assert!(res[i].0 != 0, "index is populated");
+            let mut in_list = 0;
+            for j in 0..7 {
+                if res[i].0 == expectedK1[j].0 {
+                    assert!(
+                        res[i].1 == (if res[i].0 == sfHex0 { 0 } else { 1 }),
+                        "distance is as expected"
+                    );
+                    in_list += 1;
+                }
+            }
+            assert!(in_list == 1, "index found in expected set");
+        }
+    }
 }
