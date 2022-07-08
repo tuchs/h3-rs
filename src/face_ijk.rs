@@ -311,9 +311,6 @@ pub fn _geoToFaceIjk(g: &LatLng, res: i32) -> FaceIJK {
     };
     _geoToHex2d(g, res, &mut h.face, &mut v);
 
-    println!("{}", h.face);
-    println!("{} {}", v.x, v.y);
-
     // then convert to ijk+
     _hex2dToCoordIJK(v, &mut h.coord);
     return h;

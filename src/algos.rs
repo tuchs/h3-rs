@@ -367,7 +367,6 @@ fn gridDiskDistances(origin: H3Index, k: u32) -> Result<Vec<(H3Index, u32)>, Err
     out.resize(maxIdx, (0, 0));
 
     _gridDiskDistancesInternal(origin, k, &mut out, maxIdx, 0)?;
-    println!("{:?}", &out);
     Ok(out
         .into_iter()
         .filter(|(h3index, _distance)| *h3index != 0)
@@ -457,7 +456,6 @@ fn h3NeighborRotations(
     rotations: &mut i32,
 ) -> Result<H3Index, Error> {
     let mut current: H3Index = origin;
-    println!("in: {:X} dir {}", origin, dir as u32);
 
     if dir < Direction::CenterDigit || dir >= Direction::InvalidDigit {
         return Err(Error::Failed);
@@ -615,8 +613,6 @@ fn h3NeighborRotations(
 
     *rotations = (*rotations + newRotations) % 6;
 
-    println!("current: {:X}", current);
-
     return Ok(current);
 }
 
@@ -715,7 +711,10 @@ pub fn gridDiskDistancesUnsafe(
 mod tests {
     use num::Float;
 
-    use crate::{h3_index::latLngToCell, lat_lng::LatLng};
+    use crate::{
+        h3_index::{latLngToCell, setH3Index},
+        lat_lng::LatLng,
+    };
 
     use super::*;
 
@@ -752,5 +751,42 @@ mod tests {
             }
             assert!(in_list == 1, "index found in expected set");
         }
+    }
+
+    #[test]
+    fn gridDisk0_PolarPentagon() {
+        let mut polar: H3Index = 0;
+        setH3Index(&mut polar, 0, 4, 0);
+
+        let expectedK2: Vec<H3Index> = vec![
+            0x8009fffffffffff,
+            0x8007fffffffffff,
+            0x8001fffffffffff,
+            0x8011fffffffffff,
+            0x801ffffffffffff,
+            0x8019fffffffffff,
+            0x0,
+        ];
+
+        let mut k2 = gridDiskDistances(polar, 1).unwrap();
+        k2.resize(7, (0u64, 0));
+        let mut k2present = 0;
+        for i in 0..7 {
+            if (k2[i].0 != 0) {
+                k2present += 1;
+                let mut in_list = 0;
+                for j in 0..7 {
+                    if k2[i].0 == expectedK2[j] {
+                        assert!(
+                            k2[i].1 == (if k2[i].0 == polar { 0 } else { 1 }),
+                            "distance is as expected"
+                        );
+                        in_list += 1;
+                    }
+                }
+                assert!(in_list == 1, "index found in expected set");
+            }
+        }
+        assert!(k2present == 6, "pentagon has 5 neighbors");
     }
 }

@@ -1,3 +1,5 @@
+use num::Float;
+
 use crate::constants::*;
 
 #[doc = " @struct LatLng"]
@@ -23,6 +25,29 @@ pub fn _posAngleRads(rads: f64) -> f64 {
         tmp -= M_2PI;
     }
     return tmp;
+}
+
+/**
+ * Set the components of spherical coordinates in decimal degrees.
+ *
+ * @param p The spherical coordinates.
+ * @param latDegs The desired latitude in decimal degrees.
+ * @param lngDegs The desired longitude in decimal degrees.
+ */
+pub fn setGeoDegs(p: &mut LatLng, lat_degs: f64, lng_degs: f64) {
+    _setGeoRads(p, lat_degs.to_radians(), lng_degs.to_radians());
+}
+
+/**
+ * Set the components of spherical coordinates in radians.
+ *
+ * @param p The spherical coordinates.
+ * @param latRads The desired latitude in decimal radians.
+ * @param lngRads The desired longitude in decimal radians.
+ */
+pub fn _setGeoRads(p: &mut LatLng, lat_rads: f64, lng_rads: f64) {
+    p.lat = lat_rads;
+    p.lng = lng_rads;
 }
 
 /**

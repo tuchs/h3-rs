@@ -77,6 +77,27 @@ pub const H3_DIGIT_MASK_NEGATIVE: u64 = !H3_DIGIT_MASK;
 pub type H3Index = u64;
 
 /**
+ * Gets the highest bit of the H3 index.
+ */
+pub fn H3_GET_HIGH_BIT(h3: H3Index) -> i32 {
+    return (((h3) & H3_HIGH_BIT_MASK) >> H3_MAX_OFFSET) as i32;
+}
+
+/**
+ * Sets the highest bit of the h3 to v.
+ */
+pub fn H3_SET_HIGH_BIT(h3: &mut H3Index, v: i32) {
+    *h3 = ((*h3) & H3_HIGH_BIT_MASK_NEGATIVE) | ((v as u64) << H3_MAX_OFFSET);
+}
+
+/**
+ * Gets the integer mode of h3.
+ */
+pub fn H3_GET_MODE(h3: H3Index) -> i32 {
+    return (((h3) & H3_MODE_MASK) >> H3_MODE_OFFSET) as i32;
+}
+
+/**
  * Sets the integer mode of h3 to v.
  */
 pub fn H3_SET_MODE(h3: &mut H3Index, v: i32) {
@@ -129,6 +150,108 @@ pub fn H3_SET_INDEX_DIGIT(h3: &mut H3Index, res: i32, digit: i32) {
         | ((digit as u64) << ((MAX_H3_RES - (res)) * H3_PER_DIGIT_OFFSET))
 }
 
+/**
+ * Sets a value in the reserved space. Setting to non-zero may produce invalid
+ * indexes.
+ */
+pub fn H3_SET_RESERVED_BITS(h3: &mut H3Index, v: i32) {
+    *h3 = ((*h3) & H3_RESERVED_MASK_NEGATIVE) | ((v as u64) << H3_RESERVED_OFFSET);
+}
+
+/**
+ * Gets a value in the reserved space. Should always be zero for valid indexes.
+ */
+pub fn H3_GET_RESERVED_BITS(h3: H3Index) -> i32 {
+    return ((h3 & H3_RESERVED_MASK) >> H3_RESERVED_OFFSET) as i32;
+}
+
+/**
+ * Returns whether or not an H3 index is a valid cell (hexagon or pentagon).
+ * @param h The H3 index to validate.
+ * @return 1 if the H3 index if valid, and 0 if it is not.
+ */
+pub fn isValidCell(h: H3Index) -> bool {
+    if H3_GET_HIGH_BIT(h) != 0 {
+        return false;
+    }
+
+    if H3_GET_MODE(h) != H3_CELL_MODE {
+        return false;
+    }
+
+    if H3_GET_RESERVED_BITS(h) != 0 {
+        return false;
+    }
+
+    let baseCell = H3_GET_BASE_CELL(h);
+    if baseCell < 0 || baseCell >= NUM_BASE_CELLS {
+        // LCOV_EXCL_BR_LINE
+        // Base cells less than zero can not be represented in an index
+        return false;
+    }
+
+    let res = H3_GET_RESOLUTION(h);
+    if res < 0 || res > MAX_H3_RES {
+        // LCOV_EXCL_BR_LINE
+        // Resolutions less than zero can not be represented in an index
+        return false;
+    }
+
+    let mut foundFirstNonZeroDigit = false;
+    for r in 1..(res + 1) {
+        let digit = H3_GET_INDEX_DIGIT(h, r);
+
+        if !foundFirstNonZeroDigit && digit != Direction::CenterDigit {
+            foundFirstNonZeroDigit = true;
+            if _isBaseCellPentagon(baseCell) && digit == Direction::KAxesDigit {
+                return false;
+            }
+        }
+
+        if digit < Direction::CenterDigit || digit >= Direction::NUM_DIGITS {
+            return false;
+        }
+    }
+
+    for r in (res + 1)..(MAX_H3_RES + 1) {
+        let digit = H3_GET_INDEX_DIGIT(h, r);
+        if digit != Direction::InvalidDigit {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Initializes an H3 index.
+ * @param hp The H3 index to initialize.
+ * @param res The H3 resolution to initialize the index to.
+ * @param baseCell The H3 base cell to initialize the index to.
+ * @param initDigit The H3 digit (0-7) to initialize all of the index digits to.
+ */
+pub fn setH3Index(hp: &mut H3Index, res: i32, base_cell: i32, init_digit: i32) {
+    let mut h: H3Index = H3_INIT;
+    H3_SET_MODE(&mut h, H3_CELL_MODE);
+    H3_SET_RESOLUTION(&mut h, res);
+    H3_SET_BASE_CELL(&mut h, base_cell);
+    for r in 1..(res + 1) {
+        H3_SET_INDEX_DIGIT(&mut h, r, init_digit);
+    }
+    *hp = h;
+}
+
+/**
+ * Encodes a coordinate on the sphere to the H3 index of the containing cell at
+ * the specified resolution.
+ *
+ * Returns 0 on invalid input.
+ *
+ * @param g The spherical coordinates to encode.
+ * @param res The desired H3 resolution for the encoding.
+ * @param out The encoded H3Index.
+ * @returns E_SUCCESS (0) on success, another value otherwise
+ */
 pub fn latLngToCell(g: &LatLng, res: i32) -> Result<H3Index, Error> {
     if res < 0 || res > MAX_H3_RES {
         return Err(Error::ResDomain);
@@ -368,15 +491,37 @@ pub fn _faceIjkToH3(fijk: &FaceIJK, res: i32) -> H3Index {
 mod tests {
     use num::Float;
 
+    use crate::lat_lng::setGeoDegs;
+
     use super::*;
 
     #[test]
-    fn internal() {
+    fn latLngToCellExtremeCoordinates() {
+        // Check that none of these cause crashes.
         let g = LatLng {
-            lat: 74.883263.to_radians(),
-            lng: 341.4071200.to_radians(),
+            lat: 0.0,
+            lng: 1E45,
         };
-        let res = 7;
-        assert_eq!(Ok(0x8707ac082ffffffu64), latLngToCell(&g, res));
+        latLngToCell(&g, 14).unwrap();
+
+        let g2 = LatLng {
+            lat: 1E46,
+            lng: 1E45,
+        };
+        latLngToCell(&g2, 15).unwrap();
+
+        let mut g4 = LatLng { lat: 0.0, lng: 0.0 };
+        setGeoDegs(&mut g4, 2.0, -3E39);
+        latLngToCell(&g4, 0).unwrap();
+    }
+
+    #[test]
+    fn isValidCellAtResolution() {
+        for i in 0..(MAX_H3_RES + 1) {
+            let g: LatLng = LatLng { lat: 0.0, lng: 0.0 };
+            let mut h3: H3Index = 0;
+            h3 = latLngToCell(&g, i).unwrap();
+            assert!(isValidCell(h3), "isValidCell failed on resolution {}", i);
+        }
     }
 }
