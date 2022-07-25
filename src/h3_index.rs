@@ -516,6 +516,57 @@ mod tests {
     }
 
     #[test]
+    fn faceIjkToH3ExtremeCoordinates() {
+        let fijk0I = FaceIJK {
+            face: 0,
+            coord: CoordIJK { i: 3, j: 0, k: 0 },
+        };
+        assert!(_faceIjkToH3(&fijk0I, 0) == 0, "i out of bounds at res 0");
+        let fijk0J = FaceIJK {
+            face: 1,
+            coord: CoordIJK { i: 0, j: 4, k: 0 },
+        };
+        assert!(_faceIjkToH3(&fijk0J, 0) == 0, "j out of bounds at res 0");
+        let fijk0K = FaceIJK {
+            face: 2,
+            coord: CoordIJK { i: 2, j: 0, k: 5 },
+        };
+        assert!(_faceIjkToH3(&fijk0K, 0) == 0, "k out of bounds at res 0");
+
+        let fijk1I = FaceIJK {
+            face: 3,
+            coord: CoordIJK { i: 6, j: 0, k: 0 },
+        };
+        assert!(_faceIjkToH3(&fijk1I, 1) == 0, "i out of bounds at res 1");
+        let fijk1J = FaceIJK {
+            face: 4,
+            coord: CoordIJK { i: 0, j: 7, k: 1 },
+        };
+        assert!(_faceIjkToH3(&fijk1J, 1) == 0, "j out of bounds at res 1");
+        let fijk1K = FaceIJK {
+            face: 5,
+            coord: CoordIJK { i: 2, j: 0, k: 8 },
+        };
+        assert!(_faceIjkToH3(&fijk1K, 1) == 0, "k out of bounds at res 1");
+
+        let fijk2I = FaceIJK {
+            face: 6,
+            coord: CoordIJK { i: 18, j: 0, k: 0 },
+        };
+        assert!(_faceIjkToH3(&fijk2I, 2) == 0, "i out of bounds at res 2");
+        let fijk2J = FaceIJK {
+            face: 7,
+            coord: CoordIJK { i: 0, j: 19, k: 1 },
+        };
+        assert!(_faceIjkToH3(&fijk2J, 2) == 0, "j out of bounds at res 2");
+        let fijk2K = FaceIJK {
+            face: 8,
+            coord: CoordIJK { i: 2, j: 0, k: 20 },
+        };
+        assert!(_faceIjkToH3(&fijk2K, 2) == 0, "k out of bounds at res 2");
+    }
+
+    #[test]
     fn isValidCellAtResolution() {
         for i in 0..(MAX_H3_RES + 1) {
             let g: LatLng = LatLng { lat: 0.0, lng: 0.0 };

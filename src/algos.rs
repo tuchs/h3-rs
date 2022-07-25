@@ -1,3 +1,5 @@
+use enum_primitive::FromPrimitive;
+
 use crate::{
     base_cells::{
         _baseCellIsCwOffset, _isBaseCellPentagon, _isBaseCellPolarPentagon, baseCellData,
@@ -450,7 +452,7 @@ fn _gridDiskDistancesInternal(
  * @return H3Index of the specified neighbor or 0 if deleted k-subsequence
  *         distortion is encountered.
  */
-fn h3NeighborRotations(
+pub fn h3NeighborRotations(
     origin: H3Index,
     mut dir: Direction,
     rotations: &mut i32,
@@ -617,6 +619,42 @@ fn h3NeighborRotations(
 }
 
 /**
+ * Get the direction from the origin to a given neighbor. This is effectively
+ * the reverse operation for h3NeighborRotations. Returns INVALID_DIGIT if the
+ * cells are not neighbors.
+ *
+ * TODO: This is currently a brute-force algorithm, but as it's O(6) that's
+ * probably acceptable.
+ */
+pub fn directionForNeighbor(origin: H3Index, destination: H3Index) -> Direction {
+    let isPent: bool = isPentagon(origin);
+    // Checks each neighbor, in order, to determine which direction the
+    // destination neighbor is located. Skips CENTER_DIGIT since that
+    // would be the origin; skips deleted K direction for pentagons.
+    for direction in (if isPent {
+        Direction::JAxesDigit as usize
+    } else {
+        Direction::KAxesDigit as usize
+    })..(Direction::InvalidDigit as usize)
+    {
+        let mut rotations: i32 = 0;
+        match h3NeighborRotations(
+            origin,
+            Direction::from_usize(direction).unwrap(),
+            &mut rotations,
+        ) {
+            Ok(neighbor) => {
+                if neighbor == destination {
+                    return Direction::from_usize(direction).unwrap();
+                }
+            }
+            Err(err) => {}
+        }
+    }
+    return Direction::InvalidDigit;
+}
+
+/**
  * gridDiskDistancesUnsafe produces indexes within k distance of the origin
  * index. Output behavior is undefined when one of the indexes returned by this
  * function is a pentagon or is in the pentagon distortion area.
@@ -705,6 +743,77 @@ pub fn gridDiskDistancesUnsafe(
         }
     }
     return Ok(out);
+}
+
+/**
+ * Returns the "hollow" ring of hexagons at exactly grid distance k from
+ * the origin hexagon. In particular, k=0 returns just the origin hexagon.
+ *
+ * A nonzero failure code may be returned in some cases, for example,
+ * if a pentagon is encountered.
+ * Failure cases may be fixed in future versions.
+ *
+ * @param origin Origin location.
+ * @param k k >= 0
+ * @param out Array which must be of size 6 * k (or 1 if k == 0)
+ * @return 0 if successful; nonzero otherwise.
+ */
+pub fn gridRingUnsafe(mut origin: H3Index, k: u32) -> Result<Vec<H3Index>, Error> {
+    let mut out = Vec::<H3Index>::new();
+    out.reserve_exact(6 * k as usize);
+
+    // Short-circuit on 'identity' ring
+    if k == 0 {
+        out.push(origin);
+        return Ok(out);
+    }
+
+    // Number of 60 degree ccw rotations to perform on the direction (based on
+    // which faces have been crossed.)
+    let mut rotations: i32 = 0;
+    // Scratch structure for checking for pentagons
+    if isPentagon(origin) {
+        // Pentagon was encountered; bail out as user doesn't want this.
+        return Err(Error::Pentagon);
+    }
+
+    for ring in 0..k {
+        origin = h3NeighborRotations(origin, NEXT_RING_DIRECTION, &mut rotations)?;
+
+        if isPentagon(origin) {
+            return Err(Error::Pentagon);
+        }
+    }
+
+    let lastIndex = origin;
+
+    out.push(origin);
+
+    for direction in 0..6 {
+        for pos in 0..k {
+            origin = h3NeighborRotations(origin, DIRECTIONS[direction], &mut rotations)?;
+
+            // Skip the very last index, it was already added. We do
+            // however need to traverse to it because of the pentagonal
+            // distortion check, below.
+            if pos != k - 1 || direction != 5 {
+                out.push(origin);
+
+                if isPentagon(origin) {
+                    return Err(Error::Pentagon);
+                }
+            }
+        }
+    }
+
+    // Check that this matches the expected lastIndex, if it doesn't,
+    // it indicates pentagonal distortion occurred and we should report
+    // failure.
+    if (lastIndex != origin) {
+        return Err(Error::Pentagon);
+    } else {
+        return Ok(out);
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ pub mod algos;
 mod base_cells;
 mod constants;
 mod coord_ijk;
+pub mod directed_edge;
 pub mod error;
 mod face_ijk;
 pub mod h3_index;
