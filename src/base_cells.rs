@@ -1,4 +1,10 @@
-use crate::{coord_ijk::CoordIJK, face_ijk::FaceIJK};
+use crate::{
+    constants::H3_CELL_MODE,
+    coord_ijk::CoordIJK,
+    error::Error,
+    face_ijk::FaceIJK,
+    h3_index::{H3Index, H3_INIT, H3_SET_BASE_CELL, H3_SET_MODE},
+};
 
 /** @struct BaseCellData
  * @brief information on a single base cell
@@ -4097,4 +4103,46 @@ pub fn _faceIjkToBaseCellCCWrot60(h: &FaceIJK) -> i32 {
 pub fn _baseCellIsCwOffset(baseCell: i32, testFace: i32) -> bool {
     return baseCellData[baseCell as usize].cwOffsetPent[0] == testFace
         || baseCellData[baseCell as usize].cwOffsetPent[1] == testFace;
+}
+
+/**
+ * res0CellCount returns the number of resolution 0 cells
+ *
+ * @return int count of resolution 0 cells
+ */
+pub fn res0CellCount() -> i32 {
+    return NUM_BASE_CELLS;
+}
+
+/**
+ * getRes0Cells generates all base cells storing them into the provided
+ * memory pointer. Buffer must be of size NUM_BASE_CELLS * sizeof(H3Index).
+ *
+ * @param out H3Index* the memory to store the resulting base cells in
+ * @returns E_SUCCESS.
+ */
+pub fn getRes0Cells() -> Result<Vec<H3Index>, Error> {
+    let mut out = Vec::<H3Index>::new();
+    out.resize(NUM_BASE_CELLS as usize, 0);
+    for bc in 0..(NUM_BASE_CELLS as usize) {
+        //(int bc = 0; bc < NUM_BASE_CELLS; bc++) {
+        let mut baseCell: H3Index = H3_INIT;
+        H3_SET_MODE(&mut baseCell, H3_CELL_MODE);
+        H3_SET_BASE_CELL(&mut baseCell, bc as i32);
+        out[bc] = baseCell;
+    }
+    return Ok(out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn getRes0Cells() {
+        let count = res0CellCount();
+        let indexes = super::getRes0Cells().unwrap();
+        assert_eq!(indexes[0], 0x8001fffffffffff, "correct first basecell");
+        assert_eq!(indexes[121], 0x80f3fffffffffff, "correct last basecell");
+    }
 }

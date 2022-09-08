@@ -56,6 +56,20 @@ impl Direction {
 }
 
 /**
+ * Sets an IJK coordinate to the specified component values.
+ *
+ * @param ijk The IJK coordinate to set.
+ * @param i The desired i component value.
+ * @param j The desired j component value.
+ * @param k The desired k component value.
+ */
+pub fn _setIJK(ijk: &mut CoordIJK, i: i32, j: i32, k: i32) {
+    ijk.i = i;
+    ijk.j = j;
+    ijk.k = k;
+}
+
+/**
  * Determine the containing hex in ijk+ coordinates for a 2D cartesian
  * coordinate vector (from DGGRID).
  *
@@ -158,6 +172,23 @@ pub fn _hex2dToCoordIJK(v: Vec2d, h: &mut CoordIJK) {
     }
 
     _ijkNormalize(h);
+}
+
+/**
+ * Find the center point in 2D cartesian coordinates of a hex.
+ *
+ * @param h The ijk coordinates of the hex.
+ * @param v The 2D cartesian coordinates of the hex center point.
+ */
+pub fn _ijkToHex2d(h: &CoordIJK) -> Vec2d {
+    let i = h.i - h.k;
+    let j = h.j - h.k;
+
+    let v: Vec2d = Vec2d {
+        x: (i as f64) - 0.5f64 * (j as f64),
+        y: (j as f64) * M_SQRT3_2,
+    };
+    return v;
 }
 
 /**
@@ -342,6 +373,62 @@ pub fn _downAp7r(ijk: &mut CoordIJK) {
     let mut iVec: CoordIJK = CoordIJK { i: 3, j: 1, k: 0 };
     let mut jVec: CoordIJK = CoordIJK { i: 0, j: 3, k: 1 };
     let mut kVec: CoordIJK = CoordIJK { i: 1, j: 0, k: 3 };
+
+    _ijkScale(&mut iVec, ijk.i);
+    _ijkScale(&mut jVec, ijk.j);
+    _ijkScale(&mut kVec, ijk.k);
+
+    _ijkAdd(iVec, jVec, ijk);
+    _ijkAdd(*ijk, kVec, ijk);
+
+    _ijkNormalize(ijk);
+}
+
+/**
+ * Find the normalized ijk coordinates of the hex in the specified digit
+ * direction from the specified ijk coordinates. Works in place.
+ *
+ * @param ijk The ijk coordinates.
+ * @param digit The digit direction from the original ijk coordinates.
+ */
+pub fn _neighbor(ijk: &mut CoordIJK, digit: Direction) {
+    if digit > Direction::CenterDigit && digit < Direction::NUM_DIGITS {
+        _ijkAdd(*ijk, UNIT_VECS[digit as usize], ijk);
+        _ijkNormalize(ijk);
+    }
+}
+
+/**
+ * Rotates ijk coordinates 60 degrees counter-clockwise. Works in place.
+ *
+ * @param ijk The ijk coordinates.
+ */
+pub fn _ijkRotate60ccw(ijk: &mut CoordIJK) {
+    // unit vector rotations
+    let mut iVec = CoordIJK { i: 1, j: 1, k: 0 };
+    let mut jVec = CoordIJK { i: 0, j: 1, k: 1 };
+    let mut kVec = CoordIJK { i: 1, j: 0, k: 1 };
+
+    _ijkScale(&mut iVec, ijk.i);
+    _ijkScale(&mut jVec, ijk.j);
+    _ijkScale(&mut kVec, ijk.k);
+
+    _ijkAdd(iVec, jVec, ijk);
+    _ijkAdd(*ijk, kVec, ijk);
+
+    _ijkNormalize(ijk);
+}
+
+/**
+ * Rotates ijk coordinates 60 degrees clockwise. Works in place.
+ *
+ * @param ijk The ijk coordinates.
+ */
+pub fn _ijkRotate60cw(ijk: &mut CoordIJK) {
+    // unit vector rotations
+    let mut iVec = CoordIJK { i: 1, j: 0, k: 1 };
+    let mut jVec = CoordIJK { i: 1, j: 1, k: 0 };
+    let mut kVec = CoordIJK { i: 0, j: 1, k: 1 };
 
     _ijkScale(&mut iVec, ijk.i);
     _ijkScale(&mut jVec, ijk.j);

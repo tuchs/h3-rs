@@ -1,9 +1,23 @@
 use crate::constants::*;
-use crate::coord_ijk::{CoordIJK, _hex2dToCoordIJK};
+use crate::coord_ijk::{
+    CoordIJK, _hex2dToCoordIJK, _ijkAdd, _ijkNormalize, _ijkRotate60ccw, _ijkRotate60cw, _ijkScale,
+    _ijkSub, _ijkToHex2d, _setIJK,
+};
 use crate::h3_index::isResolutionClassIII;
-use crate::lat_lng::{LatLng, _geoAzimuthRads, _posAngleRads};
-use crate::vec2d::Vec2d;
+use crate::lat_lng::{LatLng, _geoAzDistanceRads, _geoAzimuthRads, _posAngleRads};
+use crate::vec2d::{Vec2d, _v2dMag};
 use crate::vec3d::{Vec3d, _geoToVec3d, _pointSquareDist};
+
+// indexes for faceNeighbors table
+/** IJ quadrant faceNeighbors table direction */
+const IJ: usize = 1;
+/** KI quadrant faceNeighbors table direction */
+const KI: usize = 2;
+/** JK quadrant faceNeighbors table direction */
+const JK: usize = 3;
+
+/** Invalid face index */
+const INVALID_FACE: i32 = -1;
 
 /** @brief icosahedron face centers in lat/lon radians */
 const faceCenterGeo: [LatLng; NUM_ICOSA_FACES as usize] = [
@@ -296,10 +310,541 @@ const faceAxesAzRadsCII: [[f64; 3]; NUM_ICOSA_FACES as usize] = [
     ], // face 19
 ];
 
+/** @brief overage distance table */
+const maxDimByCIIres: [i32; 17] = [
+    2,        // res  0
+    -1,       // res  1
+    14,       // res  2
+    -1,       // res  3
+    98,       // res  4
+    -1,       // res  5
+    686,      // res  6
+    -1,       // res  7
+    4802,     // res  8
+    -1,       // res  9
+    33614,    // res 10
+    -1,       // res 11
+    235298,   // res 12
+    -1,       // res 13
+    1647086,  // res 14
+    -1,       // res 15
+    11529602, // res 16
+];
+
+/** @brief unit scale distance table */
+const unitScaleByCIIres: [i32; 17] = [
+    1,       // res  0
+    -1,      // res  1
+    7,       // res  2
+    -1,      // res  3
+    49,      // res  4
+    -1,      // res  5
+    343,     // res  6
+    -1,      // res  7
+    2401,    // res  8
+    -1,      // res  9
+    16807,   // res 10
+    -1,      // res 11
+    117649,  // res 12
+    -1,      // res 13
+    823543,  // res 14
+    -1,      // res 15
+    5764801, // res 16
+];
+
+/** @brief Definition of which faces neighbor each other. */
+const faceNeighbors: [[FaceOrientIJK; 4]; NUM_ICOSA_FACES as usize] = [
+    [
+        // face 0
+        FaceOrientIJK {
+            face: 0,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 4,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 1,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 5,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 1
+        FaceOrientIJK {
+            face: 1,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 0,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 2,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 6,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 2
+        FaceOrientIJK {
+            face: 2,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 1,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 3,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 7,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 3
+        FaceOrientIJK {
+            face: 3,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 2,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 4,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 8,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 4
+        FaceOrientIJK {
+            face: 4,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 3,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 0,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 9,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 5
+        FaceOrientIJK {
+            face: 5,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 10,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 14,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 0,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 6
+        FaceOrientIJK {
+            face: 6,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 11,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 10,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 1,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 7
+        FaceOrientIJK {
+            face: 7,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 12,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 11,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 2,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 8
+        FaceOrientIJK {
+            face: 8,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 13,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 12,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 3,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 9
+        FaceOrientIJK {
+            face: 9,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 14,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 13,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 4,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 10
+        FaceOrientIJK {
+            face: 10,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 5,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 6,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 15,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 11
+        FaceOrientIJK {
+            face: 11,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 6,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 7,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 16,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 12
+        FaceOrientIJK {
+            face: 12,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 7,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 8,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 17,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 13
+        FaceOrientIJK {
+            face: 13,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 8,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 9,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 18,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 14
+        FaceOrientIJK {
+            face: 14,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 9,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 3,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 5,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 3,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 19,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 15
+        FaceOrientIJK {
+            face: 15,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 16,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 19,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 10,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 16
+        FaceOrientIJK {
+            face: 16,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 17,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 15,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 11,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 17
+        FaceOrientIJK {
+            face: 17,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 18,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 16,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 12,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 18
+        FaceOrientIJK {
+            face: 18,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 19,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 17,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 13,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+    [
+        // face 19
+        FaceOrientIJK {
+            face: 19,
+            translate: CoordIJK { i: 0, j: 0, k: 0 },
+            ccwRot60: 0,
+        }, // central face
+        FaceOrientIJK {
+            face: 15,
+            translate: CoordIJK { i: 2, j: 0, k: 2 },
+            ccwRot60: 1,
+        }, // ij quadrant
+        FaceOrientIJK {
+            face: 18,
+            translate: CoordIJK { i: 2, j: 2, k: 0 },
+            ccwRot60: 5,
+        }, // ki quadrant
+        FaceOrientIJK {
+            face: 14,
+            translate: CoordIJK { i: 0, j: 2, k: 2 },
+            ccwRot60: 3,
+        }, // jk quadrant
+    ],
+];
+
 #[derive(Copy, Clone)]
 pub struct FaceIJK {
     pub face: i32,
     pub coord: CoordIJK,
+}
+
+/** @struct FaceOrientIJK
+ * @brief Information to transform into an adjacent face IJK system
+ */
+pub struct FaceOrientIJK {
+    ///< face number
+    pub face: i32,
+    ///< res 0 translation relative to primary face
+    pub translate: CoordIJK,
+    ///< number of 60 degree ccw rotations relative to primary face
+    pub ccwRot60: i32,
+}
+
+/** Digit representing overage type */
+enum_from_primitive! {
+    #[derive(PartialEq, PartialOrd, Copy, Clone)]
+    pub enum Overage {
+           /** No overage (on original face) */
+    NoOverage = 0,
+    /** On face edge (only occurs on substrate grids) */
+    FaceEdge = 1,
+    /** Overage on new face interior */
+    NewFace = 2
+    }
 }
 
 pub fn _geoToFaceIjk(g: &LatLng, res: i32) -> FaceIJK {
@@ -357,6 +902,73 @@ fn _geoToHex2d(g: &LatLng, res: i32, face: &mut i32, v: &mut Vec2d) {
 }
 
 /**
+ * Determines the center point in spherical coordinates of a cell given by 2D
+ * hex coordinates on a particular icosahedral face.
+ *
+ * @param v The 2D hex coordinates of the cell.
+ * @param face The icosahedral face upon which the 2D hex coordinate system is
+ *             centered.
+ * @param res The H3 resolution of the cell.
+ * @param substrate Indicates whether or not this grid is actually a substrate
+ *        grid relative to the specified resolution.
+ * @param g The spherical coordinates of the cell center point.
+ */
+pub fn _hex2dToGeo(v: &Vec2d, face: i32, res: i32, substrate: bool) -> LatLng {
+    // calculate (r, theta) in hex2d
+    let mut r = _v2dMag(v);
+
+    if r < EPSILON {
+        return faceCenterGeo[face as usize];
+    }
+
+    let mut theta = (v.y).atan2(v.x);
+
+    // scale for current resolution length u
+    for i in 0..res {
+        r /= M_SQRT7;
+    }
+
+    // scale accordingly if this is a substrate grid
+    if substrate {
+        r /= 3.0;
+        if isResolutionClassIII(res) {
+            r /= M_SQRT7;
+        }
+    }
+
+    r *= RES0_U_GNOMONIC;
+
+    // perform inverse gnomonic scaling of r
+    r = r.atan();
+
+    // adjust theta for Class III
+    // if a substrate grid, then it's already been adjusted for Class III
+    if !substrate && isResolutionClassIII(res) {
+        theta = _posAngleRads(theta + M_AP7_ROT_RADS);
+    }
+
+    // find theta as an azimuth
+    theta = _posAngleRads(faceAxesAzRadsCII[face as usize][0] - theta);
+
+    // now find the point at (r,theta) from the face center
+    return _geoAzDistanceRads(&faceCenterGeo[face as usize], theta, r);
+}
+
+/**
+ * Determines the center point in spherical coordinates of a cell given by
+ * a FaceIJK address at a specified resolution.
+ *
+ * @param h The FaceIJK address of the cell.
+ * @param res The H3 resolution of the cell.
+ * @param g The spherical coordinates of the cell center point.
+ */
+pub fn _faceIjkToGeo(h: FaceIJK, res: i32) -> LatLng {
+    //let mut v: Vec2d = Vec2d {x: 0, y: 0};
+    let v = _ijkToHex2d(&h.coord);
+    return _hex2dToGeo(&v, h.face, res, false);
+}
+
+/**
  * Encodes a coordinate on the sphere to the corresponding icosahedral face and
  * containing the squared euclidean distance to that face center.
  *
@@ -384,4 +996,95 @@ fn _geoToClosestFace(g: &LatLng, face: &mut i32, sqd: &mut f64) {
             *sqd = sqdT;
         }
     }
+}
+
+/**
+ * Adjusts a FaceIJK address in place so that the resulting cell address is
+ * relative to the correct icosahedral face.
+ *
+ * @param fijk The FaceIJK address of the cell.
+ * @param res The H3 resolution of the cell.
+ * @param pentLeading4 Whether or not the cell is a pentagon with a leading
+ *        digit 4.
+ * @param substrate Whether or not the cell is in a substrate grid.
+ * @return 0 if on original face (no overage); 1 if on face edge (only occurs
+ *         on substrate grids); 2 if overage on new face interior
+ */
+pub fn _adjustOverageClassII(
+    fijk: &mut FaceIJK,
+    res: i32,
+    pentLeading4: bool,
+    substrate: bool,
+) -> Overage {
+    let mut overage = Overage::NoOverage;
+
+    let ijk: &mut CoordIJK = &mut fijk.coord;
+
+    // get the maximum dimension value; scale if a substrate grid
+    let mut maxDim = maxDimByCIIres[res as usize];
+    if substrate {
+        maxDim *= 3;
+    }
+
+    // check for overage
+    if substrate && ijk.i + ijk.j + ijk.k == maxDim {
+        // on edge
+        overage = Overage::FaceEdge;
+    } else if ijk.i + ijk.j + ijk.k > maxDim {
+        // overage
+
+        overage = Overage::NewFace;
+
+        let mut fijkOrient: &FaceOrientIJK = &faceNeighbors[0][0];
+
+        if ijk.k > 0 {
+            if ijk.j > 0 {
+                // jk "quadrant"
+                fijkOrient = &faceNeighbors[fijk.face as usize][JK];
+            } else {
+                // ik "quadrant"
+                fijkOrient = &faceNeighbors[fijk.face as usize][KI];
+
+                // adjust for the pentagonal missing sequence
+                if pentLeading4 {
+                    // translate origin to center of pentagon
+                    let mut origin: CoordIJK = CoordIJK { i: 0, j: 0, k: 0 };
+                    _setIJK(&mut origin, maxDim, 0, 0);
+                    let mut tmp: CoordIJK = CoordIJK { i: 0, j: 0, k: 0 };
+                    _ijkSub(*ijk, origin, &mut tmp);
+                    // rotate to adjust for the missing sequence
+                    _ijkRotate60cw(&mut tmp);
+                    // translate the origin back to the center of the triangle
+                    _ijkAdd(tmp, origin, ijk);
+                }
+            }
+        } else {
+            // ij "quadrant"
+            fijkOrient = &faceNeighbors[fijk.face as usize][IJ];
+        }
+
+        fijk.face = fijkOrient.face;
+
+        // rotate and translate for adjacent face
+        for i in 0..fijkOrient.ccwRot60 {
+            _ijkRotate60ccw(ijk);
+        }
+
+        let mut transVec: CoordIJK = fijkOrient.translate;
+        let mut unitScale = unitScaleByCIIres[res as usize];
+        if substrate {
+            unitScale *= 3;
+        }
+        _ijkScale(&mut transVec, unitScale);
+        _ijkAdd(*ijk, transVec, ijk);
+        _ijkNormalize(ijk);
+
+        // overage points on pentagon boundaries can end up on edges
+        if substrate && ijk.i + ijk.j + ijk.k == maxDim {
+            // on edge
+            overage = Overage::FaceEdge;
+        }
+    }
+
+    return overage;
 }

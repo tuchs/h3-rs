@@ -1,13 +1,14 @@
 use h3_index::H3Index;
 
 pub mod algos;
-mod base_cells;
+pub mod base_cells;
 mod constants;
 mod coord_ijk;
 pub mod directed_edge;
 pub mod error;
 mod face_ijk;
 pub mod h3_index;
+pub mod iterators;
 pub mod lat_lng;
 pub mod vec2d;
 pub mod vec3d;

@@ -9,6 +9,7 @@ use crate::{
         isPentagon, isValidCell, H3Index, H3_GET_MODE, H3_GET_RESERVED_BITS, H3_SET_MODE,
         H3_SET_RESERVED_BITS,
     },
+    H3_NULL,
 };
 
 /**
@@ -103,6 +104,31 @@ pub fn directedEdgeToCells(edge: H3Index) -> Result<(H3Index, H3Index), Error> {
     return Ok((originResult, destinationResult));
 }
 
+/**
+ * Provides all of the directed edges from the current H3Index.
+ * @param origin The origin hexagon H3Index to find edges for.
+ * @param edges The memory to store all of the edges inside.
+ */
+pub fn originToDirectedEdges(origin: H3Index) -> [H3Index; 6] {
+    let mut edges = [0; 6];
+    // Determine if the origin is a pentagon and special treatment needed.
+    let isPent = isPentagon(origin);
+
+    // This is actually quite simple. Just modify the bits of the origin
+    // slightly for each direction, except the 'k' direction in pentagons,
+    // which is zeroed.
+    for i in 0..6 {
+        if isPent && i == 0 {
+            edges[i] = H3_NULL;
+        } else {
+            edges[i] = origin;
+            H3_SET_MODE(&mut edges[i], H3_DIRECTEDEDGE_MODE);
+            H3_SET_RESERVED_BITS(&mut edges[i], (i as i32) + 1);
+        }
+    }
+    return edges;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -167,5 +193,19 @@ mod tests {
             Err(Error::NotNeighbors),
             "Non-neighbors can't have edges"
         );
+    }
+
+    #[test]
+    fn originToDirectedEdges() {
+        let sf = latLngToCell(&sfGeo, 9).unwrap();
+        let edges = super::originToDirectedEdges(sf);
+
+        for i in 0..6 {
+            assert!(isValidDirectedEdge(edges[i]), "edge is an edge");
+            let origin = getDirectedEdgeOrigin(edges[i]).unwrap();
+            assert!(sf == origin, "origin is correct");
+            let destination = getDirectedEdgeDestination(edges[i]).unwrap();
+            assert!(sf != destination, "destination is not origin");
+        }
     }
 }

@@ -2,14 +2,15 @@ use enum_primitive::FromPrimitive;
 
 use crate::base_cells::{
     _baseCellIsCwOffset, _faceIjkToBaseCell, _faceIjkToBaseCellCCWrot60, _isBaseCellPentagon,
-    MAX_FACE_COORD,
+    baseCellData, MAX_FACE_COORD,
 };
 use crate::coord_ijk::{
-    CoordIJK, Direction, _downAp7, _downAp7r, _ijkNormalize, _ijkSub, _rotate60ccw, _rotate60cw,
-    _unitIjkToDigit, _upAp7, _upAp7r,
+    CoordIJK, Direction, _downAp7, _downAp7r, _ijkNormalize, _ijkSub, _neighbor, _rotate60ccw,
+    _rotate60cw, _unitIjkToDigit, _upAp7, _upAp7r,
 };
 use crate::error::Error;
-use crate::face_ijk::{FaceIJK, _geoToFaceIjk};
+use crate::face_ijk::{FaceIJK, Overage, _adjustOverageClassII, _faceIjkToGeo, _geoToFaceIjk};
+use crate::iterators::IterCellsChildren;
 use crate::lat_lng::LatLng;
 use crate::{constants::*, H3_NULL};
 
@@ -166,6 +167,15 @@ pub fn H3_GET_RESERVED_BITS(h3: H3Index) -> i32 {
 }
 
 /**
+ * Returns the H3 resolution of an H3 index.
+ * @param h The H3 index.
+ * @return The resolution of the H3 index argument.
+ */
+pub fn getResolution(h: H3Index) -> i32 {
+    return H3_GET_RESOLUTION(h);
+}
+
+/**
  * Returns whether or not an H3 index is a valid cell (hexagon or pentagon).
  * @param h The H3 index to validate.
  * @return 1 if the H3 index if valid, and 0 if it is not.
@@ -239,6 +249,86 @@ pub fn setH3Index(hp: &mut H3Index, res: i32, base_cell: i32, init_digit: i32) {
         H3_SET_INDEX_DIGIT(&mut h, r, init_digit);
     }
     *hp = h;
+}
+
+/**
+ * Determines whether one resolution is a valid child resolution for a cell.
+ * Each resolution is considered a valid child resolution of itself.
+ *
+ * @param h         h3Index  parent cell
+ * @param childRes  int      resolution of the child
+ *
+ * @return The validity of the child resolution
+ */
+pub fn _hasChildAtRes(h: H3Index, childRes: i32) -> bool {
+    let parentRes = H3_GET_RESOLUTION(h);
+    if childRes < parentRes || childRes > MAX_H3_RES {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * cellToChildrenSize returns the exact number of children for a cell at a
+ * given child resolution.
+ *
+ * @param h         H3Index to find the number of children of
+ * @param childRes  The child resolution you're interested in
+ *
+ * @return int      Exact number of children (handles hexagons and pentagons
+ *                  correctly)
+ */
+pub fn cellToChildrenSize(h: H3Index, childRes: i32) -> Result<i64, Error> {
+    if !_hasChildAtRes(h, childRes) {
+        return Err(Error::ResDomain);
+    }
+
+    let n = (childRes - H3_GET_RESOLUTION(h)) as u32;
+
+    if isPentagon(h) {
+        return Ok((1 + 5 * ((7i32.pow(n) - 1) / 6)) as i64);
+    } else {
+        return Ok(7i32.pow(n) as i64);
+    }
+}
+
+/**
+ * cellToChildren takes the given hexagon id and generates all of the children
+ * at the specified resolution storing them into the provided memory pointer.
+ * It's assumed that cellToChildrenSize was used to determine the allocation.
+ *
+ * @param h H3Index to find the children of
+ * @param childRes int the child level to produce
+ * @param children H3Index* the memory to store the resulting addresses in
+ */
+pub fn cellToChildren(h: H3Index, childRes: i32) -> Result<Vec<H3Index>, Error> {
+    let mut children = Vec::<H3Index>::new();
+    for child in IterCellsChildren::from_parent(h, childRes) {
+        // (IterCellsChildren iter = iterInitParent(h, childRes); iter.h;
+        //iterStepChild(&iter)) {
+        children.push(child);
+    }
+    return Ok(children);
+}
+
+/**
+ * Zero out index digits from start to end, inclusive.
+ * No-op if start > end.
+ */
+pub fn _zeroIndexDigits(h: H3Index, start: i32, end: i32) -> H3Index {
+    if start > end {
+        return h;
+    }
+
+    let mut m: H3Index = 0;
+
+    m = !m;
+    m <<= H3_PER_DIGIT_OFFSET * (end - start + 1);
+    m = !m;
+    m <<= H3_PER_DIGIT_OFFSET * (MAX_H3_RES - end);
+    m = !m;
+
+    return h & m;
 }
 
 /**
@@ -487,13 +577,177 @@ pub fn _faceIjkToH3(fijk: &FaceIJK, res: i32) -> H3Index {
     return h;
 }
 
+/**
+ * Convert an H3Index to the FaceIJK address on a specified icosahedral face.
+ * @param h The H3Index.
+ * @param fijk The FaceIJK address, initialized with the desired face
+ *        and normalized base cell coordinates.
+ * @return Returns 1 if the possibility of overage exists, otherwise 0.
+ */
+pub fn _h3ToFaceIjkWithInitializedFijk(h: H3Index, fijk: &mut FaceIJK) -> bool {
+    //CoordIJK *ijk = &fijk->coord;
+    let res = H3_GET_RESOLUTION(h);
+
+    // center base cell hierarchy is entirely on this face
+    let mut possibleOverage = true;
+    if !_isBaseCellPentagon(H3_GET_BASE_CELL(h))
+        && (res == 0 || (fijk.coord.i == 0 && fijk.coord.j == 0 && fijk.coord.k == 0))
+    {
+        possibleOverage = false;
+    }
+
+    for r in 1..(res + 1) {
+        if isResolutionClassIII(r) {
+            // Class III == rotate ccw
+            _downAp7(&mut fijk.coord);
+        } else {
+            // Class II == rotate cw
+            _downAp7r(&mut fijk.coord);
+        }
+
+        _neighbor(&mut fijk.coord, H3_GET_INDEX_DIGIT(h, r));
+    }
+
+    return possibleOverage;
+}
+
+/**
+ * Convert an H3Index to a FaceIJK address.
+ * @param h The H3Index.
+ * @param fijk The corresponding FaceIJK address.
+ */
+pub fn _h3ToFaceIjk(mut h: H3Index) -> Result<FaceIJK, Error> {
+    let baseCell = H3_GET_BASE_CELL(h);
+    if baseCell < 0 || baseCell >= NUM_BASE_CELLS {
+        // LCOV_EXCL_BR_LINE
+        // Base cells less than zero can not be represented in an index
+        return Err(Error::CellInvalid);
+    }
+    // adjust for the pentagonal missing sequence; all of sub-sequence 5 needs
+    // to be adjusted (and some of sub-sequence 4 below)
+    if _isBaseCellPentagon(baseCell) && _h3LeadingNonZeroDigit(h) as i32 == 5 {
+        h = _h3Rotate60cw(h);
+    }
+
+    // start with the "home" face and ijk+ coordinates for the base cell of c
+    let mut fijk = baseCellData[baseCell as usize].homeFijk;
+    if !_h3ToFaceIjkWithInitializedFijk(h, &mut fijk) {
+        return Ok(fijk); // no overage is possible; h lies on this face
+    }
+
+    // if we're here we have the potential for an "overage"; i.e., it is
+    // possible that c lies on an adjacent face
+    let origIJK = fijk.coord;
+
+    // if we're in Class III, drop into the next finer Class II grid
+    let mut res = H3_GET_RESOLUTION(h);
+    if isResolutionClassIII(res) {
+        // Class III
+        _downAp7r(&mut fijk.coord);
+        res += 1;
+    }
+
+    // adjust for overage if needed
+    // a pentagon base cell with a leading 4 digit requires special handling
+    let pentLeading4 = _isBaseCellPentagon(baseCell) && (_h3LeadingNonZeroDigit(h) as i32) == 4;
+    if _adjustOverageClassII(&mut fijk, res, pentLeading4, false) != Overage::NoOverage {
+        // if the base cell is a pentagon we have the potential for secondary
+        // overages
+        if _isBaseCellPentagon(baseCell) {
+            while _adjustOverageClassII(&mut fijk, res, false, false) != Overage::NoOverage {
+                continue;
+            }
+        }
+
+        if res != H3_GET_RESOLUTION(h) {
+            _upAp7r(&mut fijk.coord);
+        }
+    } else if res != H3_GET_RESOLUTION(h) {
+        fijk.coord = origIJK;
+    }
+    return Ok(fijk);
+}
+
+/**
+ * Determines the spherical coordinates of the center point of an H3 index.
+ *
+ * @param h3 The H3 index.
+ * @param g The spherical coordinates of the H3 cell center.
+ */
+pub fn cellToLatLng(h3: H3Index) -> Result<LatLng, Error> {
+    let mut fijk: FaceIJK = _h3ToFaceIjk(h3)?;
+    let geo = _faceIjkToGeo(fijk, H3_GET_RESOLUTION(h3));
+    return Ok(geo);
+}
+
 #[cfg(test)]
 mod tests {
     use num::Float;
 
-    use crate::lat_lng::setGeoDegs;
+    use crate::lat_lng::{geoAlmostEqualThreshold, setGeoDegs};
 
     use super::*;
+
+    fn assertNoDuplicates(cells: &Vec<H3Index>) {
+        for i in 0..cells.len() {
+            if cells[i] == H3_NULL {
+                continue;
+            }
+            assert!(isValidCell(cells[i]), "must be valid H3 cell");
+            for j in (i + 1)..cells.len() {
+                assert!(cells[i] != cells[j], "can't have duplicate cells in set");
+            }
+        }
+    }
+
+    // assert that set1 is a subset of set2
+    fn assertSubset(set1: &Vec<H3Index>, set2: &Vec<H3Index>) {
+        assertNoDuplicates(set1);
+
+        for i in set1 {
+            if *i == H3_NULL {
+                continue;
+            }
+
+            let mut present = false;
+            for j in set2 {
+                if *i == *j {
+                    present = true;
+                    break;
+                };
+            }
+            assert!(present, "children must match");
+        }
+    }
+
+    /*
+    Assert that two arrays of h3 cells are equal sets:
+        - No duplicate cells allowed.
+        - Ignore zero elements (so array sizes may be different).
+        - Ignore array order.
+    */
+    fn assertSetsEqual(set1: &Vec<H3Index>, set2: &Vec<H3Index>) {
+        assertSubset(set1, set2);
+        assertSubset(set2, set1);
+    }
+
+    fn checkChildren(
+        h: H3Index,
+        res: i32,
+        expectedError: Result<i64, Error>,
+        expected: Vec<H3Index>,
+    ) {
+        let numChildren: i64 = 0;
+        let numChildrenError = cellToChildrenSize(h, res);
+
+        assert_eq!(numChildrenError, expectedError, "Expected error code");
+        if expectedError.is_err() {
+            return;
+        }
+        let children = cellToChildren(h, res).unwrap();
+
+        assertSetsEqual(&children, &expected);
+    }
 
     #[test]
     fn latLngToCellExtremeCoordinates() {
@@ -574,5 +828,174 @@ mod tests {
             h3 = latLngToCell(&g, i).unwrap();
             assert!(isValidCell(h3), "isValidCell failed on resolution {}", i);
         }
+    }
+
+    #[test]
+    fn cellToChildrenSize_hexagon() {
+        let h: H3Index = 0x87283080dffffff; // res 7 *hexagon*
+
+        let mut sz: i64 = 0;
+        assert!(
+            cellToChildrenSize(h, 3) == Err(Error::ResDomain),
+            "got expected size for coarser res"
+        );
+        sz = cellToChildrenSize(h, 7).unwrap();
+        assert_eq!(sz, 1, "got expected size for same res");
+        sz = cellToChildrenSize(h, 8).unwrap();
+        assert_eq!(sz, 7, "got expected size for child res");
+        sz = cellToChildrenSize(h, 9).unwrap();
+        assert_eq!(sz, 7 * 7, "got expected size for grandchild res");
+    }
+
+    #[test]
+    fn cellToChildrenSize_pentagon() {
+        let h: H3Index = 0x870800000ffffff; // res 7 *pentagon*
+
+        let mut sz: i64 = 0;
+        assert!(
+            cellToChildrenSize(h, 3) == Err(Error::ResDomain),
+            "got expected size for coarser res"
+        );
+        sz = cellToChildrenSize(h, 7).unwrap();
+        assert_eq!(sz, 1, "got expected size for same res");
+        sz = cellToChildrenSize(h, 8).unwrap();
+        assert_eq!(sz, 6, "got expected size for child res");
+        sz = cellToChildrenSize(h, 9).unwrap();
+        assert_eq!(
+            sz,
+            (5 * 7) + (1 * 6),
+            "got expected size for grandchild res"
+        );
+    }
+
+    #[test]
+    fn oneResStep() {
+        let h: H3Index = 0x88283080ddfffff;
+        let res = 9;
+
+        let expected: Vec<H3Index> = vec![
+            0x89283080dc3ffff,
+            0x89283080dc7ffff,
+            0x89283080dcbffff,
+            0x89283080dcfffff,
+            0x89283080dd3ffff,
+            0x89283080dd7ffff,
+            0x89283080ddbffff,
+        ];
+
+        checkChildren(h, res, Ok(expected.len() as i64), expected);
+    }
+
+    #[test]
+    fn multipleResSteps() {
+        let h = 0x88283080ddfffff;
+        let res = 10;
+
+        let expected = vec![
+            0x8a283080dd27fff,
+            0x8a283080dd37fff,
+            0x8a283080dc47fff,
+            0x8a283080dcdffff,
+            0x8a283080dc5ffff,
+            0x8a283080dc27fff,
+            0x8a283080ddb7fff,
+            0x8a283080dc07fff,
+            0x8a283080dd8ffff,
+            0x8a283080dd5ffff,
+            0x8a283080dc4ffff,
+            0x8a283080dd47fff,
+            0x8a283080dce7fff,
+            0x8a283080dd1ffff,
+            0x8a283080dceffff,
+            0x8a283080dc6ffff,
+            0x8a283080dc87fff,
+            0x8a283080dcaffff,
+            0x8a283080dd2ffff,
+            0x8a283080dcd7fff,
+            0x8a283080dd9ffff,
+            0x8a283080dd6ffff,
+            0x8a283080dcc7fff,
+            0x8a283080dca7fff,
+            0x8a283080dccffff,
+            0x8a283080dd77fff,
+            0x8a283080dc97fff,
+            0x8a283080dd4ffff,
+            0x8a283080dd97fff,
+            0x8a283080dc37fff,
+            0x8a283080dc8ffff,
+            0x8a283080dcb7fff,
+            0x8a283080dcf7fff,
+            0x8a283080dd87fff,
+            0x8a283080dda7fff,
+            0x8a283080dc9ffff,
+            0x8a283080dc77fff,
+            0x8a283080dc67fff,
+            0x8a283080dc57fff,
+            0x8a283080ddaffff,
+            0x8a283080dd17fff,
+            0x8a283080dc17fff,
+            0x8a283080dd57fff,
+            0x8a283080dc0ffff,
+            0x8a283080dd07fff,
+            0x8a283080dc1ffff,
+            0x8a283080dd0ffff,
+            0x8a283080dc2ffff,
+            0x8a283080dd67fff,
+        ];
+
+        checkChildren(h, res, Ok(expected.len() as i64), expected);
+    }
+
+    fn assertCellToLatLngExpected(h1: H3Index, g1: LatLng) {
+        let epsilon = 0.000001 * M_PI_180;
+        // convert H3 to lat/lng and verify
+        let g2 = cellToLatLng(h1).unwrap();
+        //assert_eq!(g1.lat, g2.lat);
+        //assert_eq!(g1.lng, g2.lng);
+
+        assert!(
+            geoAlmostEqualThreshold(&g2, &g1, epsilon),
+            "got expected cellToLatLng output"
+        );
+
+        // Convert back to H3 to verify
+        let res = getResolution(h1);
+        let h2 = latLngToCell(&g2, res).unwrap();
+        assert_eq!(h1, h2, "got expected latLngToCell output");
+    }
+
+    #[test]
+    fn provisionalCellToLatLngTest() {
+        assertCellToLatLngExpected(
+            0x8001fffffffffff,
+            LatLng {
+                lat: 79.2423985098.to_radians(),
+                lng: 38.0234070080.to_radians(),
+            },
+        );
+
+        assertCellToLatLngExpected(
+            0x8045fffffffffff,
+            LatLng {
+                lat: 25.4691389839.to_radians(),
+                lng: -85.1593898623.to_radians(),
+            },
+        );
+
+        assertCellToLatLngExpected(
+            0x81ccbffffffffff,
+            LatLng {
+                lat: -35.9592925857.to_radians(),
+                lng: 84.9085000539.to_radians(),
+            },
+        );
+
+        assertCellToLatLngExpected(
+            0x845a5ebffffffff,
+            LatLng {
+                lat: 16.7016667635.to_radians(),
+                lng: 164.8158089958.to_radians(),
+            },
+        );
     }
 }

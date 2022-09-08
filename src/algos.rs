@@ -809,7 +809,7 @@ pub fn gridRingUnsafe(mut origin: H3Index, k: u32) -> Result<Vec<H3Index>, Error
     // Check that this matches the expected lastIndex, if it doesn't,
     // it indicates pentagonal distortion occurred and we should report
     // failure.
-    if (lastIndex != origin) {
+    if lastIndex != origin {
         return Err(Error::Pentagon);
     } else {
         return Ok(out);
