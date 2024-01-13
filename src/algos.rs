@@ -355,7 +355,7 @@ pub fn maxGridDiskSize(k: u32) -> usize {
  * @param  distances   NULL or a zero-filled array which must be of size
  *                     maxGridDiskSize(k)
  */
-fn gridDiskDistances(origin: H3Index, k: u32) -> Result<Vec<(H3Index, u32)>, Error> {
+pub fn gridDiskDistances(origin: H3Index, k: u32) -> Result<Vec<(H3Index, u32)>, Error> {
     // Optimistically try the faster gridDiskUnsafe algorithm first
     match gridDiskDistancesUnsafe(origin, k) {
         Ok(out) => return Ok(out),

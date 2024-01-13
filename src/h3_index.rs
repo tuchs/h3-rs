@@ -1,4 +1,5 @@
 use enum_primitive::FromPrimitive;
+use num::pow;
 
 use crate::base_cells::{
     _baseCellIsCwOffset, _faceIjkToBaseCell, _faceIjkToBaseCellCCWrot60, _isBaseCellPentagon,
@@ -678,6 +679,78 @@ pub fn cellToLatLng(h3: H3Index) -> Result<LatLng, Error> {
     let mut fijk: FaceIJK = _h3ToFaceIjk(h3)?;
     let geo = _faceIjkToGeo(fijk, H3_GET_RESOLUTION(h3));
     return Ok(geo);
+}
+
+/**
+ * Validate a child position in the context of a given parent, returning
+ * an error if validation fails.
+ */
+pub fn validateChildPos(childPos: i64, parent: H3Index, childRes: i32) -> Result<(), Error> {
+    let maxChildCount = cellToChildrenSize(parent, childRes)?;
+    if childPos < 0 || childPos >= maxChildCount {
+        return Err(Error::Domain);
+    }
+    Ok(())
+}
+
+/**
+ * Returns the child cell at a given position within an ordered list of all
+ * children at the specified resolution */
+pub fn childPosToCell(childPos: i64, parent: H3Index, childRes: i32) -> Result<H3Index, Error> {
+    // Validate resolution
+    if childRes < 0 || childRes > MAX_H3_RES {
+        return Err(Error::ResDomain);
+    }
+    // Validate parent resolution
+    let parentRes = H3_GET_RESOLUTION(parent);
+    if childRes < parentRes {
+        return Err(Error::ResMismatch);
+    }
+    // Validate child pos
+    let _childPosErr = validateChildPos(childPos, parent, childRes)?;
+
+    let resOffset = childRes - parentRes;
+
+    let mut child = parent;
+    let mut idx = childPos;
+
+    H3_SET_RESOLUTION(&mut child, childRes);
+
+    if isPentagon(parent) {
+        // Pentagon tile logic. Pentagon tiles skip the 1 digit, so the offsets
+        // are different
+        let mut inPent = true;
+        for res in 1..(resOffset + 1) {
+            let resWidth = pow(7, (resOffset - res) as usize);
+            if inPent {
+                // While we are inside a parent pentagon, we need to check if
+                // this cell is a pentagon, and if not, we need to offset its
+                // digit to account for the skipped direction
+                let pentWidth = 1 + (5 * (resWidth - 1)) / 6;
+                if idx < pentWidth {
+                    H3_SET_INDEX_DIGIT(&mut child, parentRes + res, 0);
+                } else {
+                    idx -= pentWidth;
+                    inPent = false;
+                    H3_SET_INDEX_DIGIT(&mut child, parentRes + res, (idx / resWidth) as i32 + 2);
+                    idx %= resWidth;
+                }
+            } else {
+                // We're no longer inside a pentagon, continue as for hex
+                H3_SET_INDEX_DIGIT(&mut child, parentRes + res, (idx / resWidth) as i32);
+                idx %= resWidth;
+            }
+        }
+    } else {
+        // Hexagon tile logic. Offsets are simple powers of 7
+        for res in 1..(resOffset + 1) {
+            let resWidth = pow(7, (resOffset - res) as usize);
+            H3_SET_INDEX_DIGIT(&mut child, parentRes + res, (idx / resWidth) as i32);
+            idx %= resWidth;
+        }
+    }
+
+    return Ok(child);
 }
 
 #[cfg(test)]
